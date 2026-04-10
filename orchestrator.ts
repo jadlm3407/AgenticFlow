@@ -15,7 +15,7 @@
 import "dotenv/config";
 import { spawn, ChildProcess }              from "child_process";
 import path                                 from "path";
-import { SimpleSPV, SimpleWallet }          from "@bsv/simple";
+import axios from "axios";
 import { PrivateKey }                       from "@bsv/sdk";
 import { startClientAgent, stopClientAgent, agentBus } from "./agents/client-agent";
 import { bootstrapChains, startEngine, engineBus }     from "./engine/tx-engine";
@@ -47,12 +47,20 @@ const ARC_URL = process.env.ARC_API_URL ?? "https://arc.taal.com";
 // ─── Wallet health check ──────────────────────────────────────────────────────
 
 async function checkWalletBalance(wif: string, label: string): Promise<number> {
-  const key    = PrivateKey.fromWif(wif);
-  const wallet = new SimpleWallet({ privateKey: key, arcUrl: ARC_URL, apiKey: process.env.ARC_API_KEY! });
-  const utxos  = await wallet.listUnspent();
-  const total  = utxos.reduce((acc: number, u: any) => acc + Number(u.value), 0);
-  console.log(`💳  [${label}] Balance: ${total.toLocaleString()} satoshis`);
-  return total;
+  try {
+    const key     = PrivateKey.fromWif(wif);
+    const address = key.toAddress().toString();
+    const res     = await axios.get(
+      `https://api.whatsonchain.com/v1/bsv/main/address/${address}/unspent`,
+      { timeout: 10_000 }
+    );
+    const total = (res.data as any[]).reduce((acc, u) => acc + Number(u.value), 0);
+    console.log(`💳  [${label}] Balance: ${total.toLocaleString()} satoshis (${address})`);
+    return total;
+  } catch (err: any) {
+    console.warn(`⚠️  [${label}] Could not fetch balance: ${err.message}`);
+    return 0;
+  }
 }
 
 // ─── MCP Server subprocess ────────────────────────────────────────────────────

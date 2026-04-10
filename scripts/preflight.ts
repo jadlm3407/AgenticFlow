@@ -8,7 +8,7 @@
 
 import "dotenv/config";
 import { PrivateKey } from "@bsv/sdk";
-import { SimpleWallet } from "@bsv/simple";
+import axios from "axios";
 
 const REQUIRED_ENV = [
   "ARC_API_KEY",
@@ -33,15 +33,13 @@ async function checkBalance(
   minSats: number
 ): Promise<number> {
   try {
-    const key    = PrivateKey.fromWif(wif);
-    const wallet = new SimpleWallet({
-      privateKey: key,
-      arcUrl:     process.env.ARC_API_URL ?? "https://arc.taal.com",
-      apiKey:     process.env.ARC_API_KEY!,
-    });
-    const utxos   = await wallet.listUnspent();
-    const balance = utxos.reduce((acc: number, u: any) => acc + Number(u.value), 0);
-
+    const key     = PrivateKey.fromWif(wif);
+    const address = key.toAddress().toString();
+    const res     = await axios.get(
+      `https://api.whatsonchain.com/v1/bsv/main/address/${address}/unspent`,
+      { timeout: 10_000 }
+    );
+    const balance = (res.data as any[]).reduce((acc, u) => acc + Number(u.value), 0);
     if (balance >= minSats) {
       ok(`${label}: ${balance.toLocaleString()} sats (min: ${minSats.toLocaleString()})`);
     } else {
