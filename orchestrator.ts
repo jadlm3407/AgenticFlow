@@ -1,38 +1,31 @@
 /**
  * AgenticFlow — Autonomous Orchestrator
- * Single entry point that wires all agents together and starts the
- * autonomous payment loop with ZERO human triggers after launch.
  *
- * Boot sequence:
- *  1. Verify wallet balances on both agents
- *  2. Fan-out treasury UTXO to N engine chains
- *  3. Start Skills Agent MCP server
- *  4. Start Client Agent negotiation loop
- *  5. Start High-Frequency TX Engine
- *  6. Health-check watchdog with auto-recovery
+ * Wires together three BRC-100/105 compliant agents:
+ *   - SkillsAgent  (MCP server, tool seller, BRC-105 payee)
+ *   - ClientAgent  (autonomous buyer, BRC-105 payer)
+ *   - EngineAgent  (high-frequency TX engine, UTXO chain fan-out)
+ *
+ * Uses @bsv/wallet-toolbox patterns for wallet health checks.
+ * 100% autonomous after launch — no human triggers.
  */
 
 import "dotenv/config";
-import { spawn, ChildProcess }              from "child_process";
-import path                                 from "path";
-import axios from "axios";
-import { PrivateKey }                       from "@bsv/sdk";
+import { spawn, ChildProcess }  from "child_process";
+import path                     from "path";
+import axios                    from "axios";
+import { PrivateKey }           from "@bsv/sdk";
 import { startClientAgent, stopClientAgent, agentBus } from "./agents/client-agent";
 import { bootstrapChains, startEngine, engineBus }     from "./engine/tx-engine";
 
 // ─── Config validation ────────────────────────────────────────────────────────
 
 const REQUIRED_ENV = [
-  "SKILLS_AGENT_WIF",
-  "SKILLS_AGENT_ADDRESS",
-  "CLIENT_AGENT_WIF",
-  "CLIENT_AGENT_ADDRESS",
-  "ENGINE_AGENT_WIF",
-  "ENGINE_AGENT_ADDRESS",
+  "SKILLS_AGENT_WIF", "SKILLS_AGENT_ADDRESS",
+  "CLIENT_AGENT_WIF", "CLIENT_AGENT_ADDRESS",
+  "ENGINE_AGENT_WIF", "ENGINE_AGENT_ADDRESS",
   "ARC_API_KEY",
-  "TREASURY_TX_HEX",
-  "TREASURY_VOUT",
-  "TREASURY_SATS",
+  "TREASURY_TX_HEX",  "TREASURY_VOUT", "TREASURY_SATS",
 ];
 
 for (const key of REQUIRED_ENV) {
@@ -44,18 +37,20 @@ for (const key of REQUIRED_ENV) {
 
 const ARC_URL = process.env.ARC_API_URL ?? "https://arc.taal.com";
 
-// ─── Wallet health check ──────────────────────────────────────────────────────
+// ─── BRC-100 wallet health check (via WhatsOnChain) ──────────────────────────
 
 async function checkWalletBalance(wif: string, label: string): Promise<number> {
   try {
     const key     = PrivateKey.fromWif(wif);
     const address = key.toAddress().toString();
+    const network = ARC_URL.includes("testnet") ? "test" : "main";
     const res     = await axios.get(
-      `https://api.whatsonchain.com/v1/bsv/main/address/${address}/unspent`,
+      `https://api.whatsonchain.com/v1/bsv/${network}/address/${address}/unspent`,
       { timeout: 10_000 }
     );
     const total = (res.data as any[]).reduce((acc, u) => acc + Number(u.value), 0);
-    console.log(`💳  [${label}] Balance: ${total.toLocaleString()} satoshis (${address})`);
+    console.log(`💳  [${label}] ${address}`);
+    console.log(`    Balance: ${total.toLocaleString()} sats`);
     return total;
   } catch (err: any) {
     console.warn(`⚠️  [${label}] Could not fetch balance: ${err.message}`);
@@ -63,9 +58,9 @@ async function checkWalletBalance(wif: string, label: string): Promise<number> {
   }
 }
 
-// ─── MCP Server subprocess ────────────────────────────────────────────────────
+// ─── SkillsAgent subprocess (with auto-restart) ───────────────────────────────
 
-function spawnMcpServer(): ChildProcess {
+function spawnSkillsAgent(): ChildProcess {
   const serverPath = path.resolve(__dirname, "agents", "skills-server.ts");
   const proc = spawn("npx", ["ts-node", "--transpile-only", serverPath], {
     env:   process.env,
@@ -73,16 +68,15 @@ function spawnMcpServer(): ChildProcess {
   });
 
   proc.stdout?.on("data", (d: Buffer) =>
-    process.stdout.write(`[SkillsAgent] ${d.toString()}`)
+    process.stdout.write(`[SkillsAgent] ${d}`)
   );
   proc.stderr?.on("data", (d: Buffer) =>
-    process.stderr.write(`[SkillsAgent:ERR] ${d.toString()}`)
+    process.stderr.write(`[SkillsAgent:ERR] ${d}`)
   );
-
-  proc.on("exit", (code) => {
+  proc.on("exit", code => {
     if (code !== 0 && code !== null) {
-      console.error(`💥  SkillsAgent exited with code ${code}. Restarting in 5s…`);
-      setTimeout(() => spawnMcpServer(), 5000);
+      console.error(`💥  SkillsAgent exited (code ${code}). Restarting in 5s…`);
+      setTimeout(spawnSkillsAgent, 5_000);
     }
   });
 
@@ -91,54 +85,42 @@ function spawnMcpServer(): ChildProcess {
 
 // ─── Watchdog ─────────────────────────────────────────────────────────────────
 
-interface WatchdogState {
-  lastTxAt:       number;
-  totalSent:      number;
-  consecutiveFails: number;
-}
-
-function startWatchdog(
-  getStats: () => { sent: number; failed: number }
-): NodeJS.Timeout {
-  const state: WatchdogState = {
-    lastTxAt:         Date.now(),
-    totalSent:        0,
-    consecutiveFails: 0,
-  };
+function startWatchdog(getStats: () => { sent: number; failed: number }): NodeJS.Timeout {
+  let lastSent   = 0;
+  let lastTxAt   = Date.now();
+  let stalePings = 0;
 
   return setInterval(() => {
-    const { sent, failed } = getStats();
-    const newSent = sent - state.totalSent;
-
-    if (newSent > 0) {
-      state.lastTxAt         = Date.now();
-      state.consecutiveFails = 0;
+    const { sent } = getStats();
+    if (sent > lastSent) {
+      lastTxAt   = Date.now();
+      stalePings = 0;
     } else {
-      const staleSec = Math.round((Date.now() - state.lastTxAt) / 1000);
-      console.warn(`⚠️  Watchdog: no new TXs for ${staleSec}s`);
-      state.consecutiveFails++;
+      stalePings++;
+      const staleSec = Math.round((Date.now() - lastTxAt) / 1000);
+      console.warn(`⚠️  Watchdog: no new TXs for ${staleSec}s (ping ${stalePings}/3)`);
+      if (stalePings >= 3) {
+        engineBus.emit("stall-detected", { staleSec });
+        stalePings = 0;
+      }
     }
-
-    if (state.consecutiveFails >= 3) {
-      console.error("🚨  Engine appears stalled. Alerting operators.");
-      // In production: trigger PagerDuty / re-bootstrap chains
-      engineBus.emit("stall-detected", { staleSec: (Date.now() - state.lastTxAt) / 1000 });
-      state.consecutiveFails = 0;
-    }
-
-    state.totalSent = sent;
-  }, 30_000); // check every 30 s
+    lastSent = sent;
+  }, 30_000);
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log("╔══════════════════════════════════════╗");
-  console.log("║   AgenticFlow · Autonomous Boot      ║");
-  console.log("║   Open Run Agentic Pay 2026          ║");
-  console.log("╚══════════════════════════════════════╝\n");
+  console.log("\n╔══════════════════════════════════════════════╗");
+  console.log("║   AgenticFlow · BRC-100/105 · Autonomous    ║");
+  console.log("║   Open Run Agentic Pay 2026                 ║");
+  console.log("╚══════════════════════════════════════════════╝\n");
 
-  // 1. Wallet health
+  const network = ARC_URL.includes("testnet") ? "🟡 TESTNET" : "🟢 MAINNET";
+  console.log(`🌐  Network: ${network} (${ARC_URL})\n`);
+
+  // 1. Wallet health checks (BRC-100 wallet pattern)
+  console.log("── Wallet Balances ────────────────────────────────");
   await Promise.all([
     checkWalletBalance(process.env.CLIENT_AGENT_WIF!,  "ClientAgent"),
     checkWalletBalance(process.env.ENGINE_AGENT_WIF!,  "EngineAgent"),
@@ -146,42 +128,44 @@ async function main() {
   ]);
 
   // 2. Bootstrap UTXO chains
-  console.log("\n🔗  Bootstrapping UTXO fan-out chains…");
+  console.log("\n── UTXO Fan-out ────────────────────────────────────");
   const chains = await bootstrapChains(
     process.env.TREASURY_TX_HEX!,
     Number(process.env.TREASURY_VOUT),
     BigInt(process.env.TREASURY_SATS!)
   );
-  console.log(`✅  ${chains.length} chains ready\n`);
+  console.log(`✅  ${chains.length} chains bootstrapped\n`);
 
-  // 3. Start MCP server (subprocess)
-  console.log("🌐  Starting SkillsAgent MCP server…");
-  const mcpProc = spawnMcpServer();
-  await new Promise(r => setTimeout(r, 2000)); // wait for server to bind
+  // 3. Start SkillsAgent MCP server (BRC-105 payee)
+  console.log("── Starting SkillsAgent (BRC-105 server) ──────────");
+  const mcpProc = spawnSkillsAgent();
+  await new Promise(r => setTimeout(r, 2_000)); // wait for port to bind
 
-  // 4. Start client agent
-  console.log("🤖  Starting ClientAgent autonomous loop…");
+  // 4. Start ClientAgent autonomous loop (BRC-105 payer)
+  console.log("── Starting ClientAgent (BRC-105 client) ──────────");
   const clientHandle = startClientAgent();
 
-  // 5. Start TX engine
-  console.log("⚡  Starting TX engine…");
+  // 5. Start TX Engine
+  console.log("── Starting TX Engine (UTXO chains) ───────────────");
   const engine = await startEngine(chains);
 
   // 6. Watchdog
-  let lastStats = { sent: 0, failed: 0 };
-  engineBus.on("stats", (s: any) => { lastStats = s; });
-  const watchdog = startWatchdog(() => lastStats);
+  let liveStats = { sent: 0, failed: 0, tps: 0, startTime: Date.now() };
+  engineBus.on("stats", (s: any) => { liveStats = s; });
+  const watchdog = startWatchdog(() => liveStats);
 
-  // 7. Log summary every minute
+  // 7. Summary every 60 s
   const summaryTimer = setInterval(() => {
-    const elapsed  = ((Date.now() - lastStats.startTime ?? Date.now()) / 60_000).toFixed(1);
-    const failRate = lastStats.sent > 0
-      ? ((lastStats.failed / lastStats.sent) * 100).toFixed(2)
-      : "0.00";
-    console.log(`📊  Summary | +${elapsed}min | sent: ${lastStats.sent.toLocaleString()} | tps: ${lastStats.tps?.toFixed(2)} | fail%: ${failRate}`);
+    const mins    = ((Date.now() - liveStats.startTime) / 60_000).toFixed(1);
+    const failPct = liveStats.sent > 0
+      ? ((liveStats.failed / liveStats.sent) * 100).toFixed(2) : "0.00";
+    console.log(
+      `📊  t+${mins}min | sent: ${liveStats.sent.toLocaleString()} | ` +
+      `tps: ${liveStats.tps?.toFixed(2) ?? "0.00"} | fail%: ${failPct}`
+    );
   }, 60_000);
 
-  // ── Graceful shutdown ────────────────────────────────────────────────────────
+  // Graceful shutdown
   const shutdown = () => {
     console.log("\n🛑  Shutting down AgenticFlow…");
     stopClientAgent(clientHandle);
@@ -189,17 +173,17 @@ async function main() {
     clearInterval(watchdog);
     clearInterval(summaryTimer);
     mcpProc.kill("SIGTERM");
-    setTimeout(() => process.exit(0), 3000);
+    setTimeout(() => process.exit(0), 3_000);
   };
 
   process.on("SIGINT",  shutdown);
   process.on("SIGTERM", shutdown);
 
   console.log("\n✅  All systems autonomous. No human interaction required.");
-  console.log("   Press Ctrl+C to stop gracefully.\n");
+  console.log(`🔍  Verify TXs: https://whatsonchain.com/address/${process.env.ENGINE_AGENT_ADDRESS}\n`);
 }
 
 main().catch(err => {
-  console.error("💥  Fatal orchestrator error:", err);
+  console.error("💥  Fatal:", err.message);
   process.exit(1);
 });

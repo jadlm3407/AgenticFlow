@@ -1,18 +1,17 @@
 /**
  * AgenticFlow — Preflight Check
- * Run before the hackathon demo to verify everything is configured correctly.
- * Checks wallets, balances, ARC connectivity, and MCP server reachability.
+ * Validates wallets, balances, ARC connectivity, and MCP server.
+ * Run before every demo or hackathon submission.
  *
  * Usage:  npm run preflight
  */
 
 import "dotenv/config";
 import { PrivateKey } from "@bsv/sdk";
-import axios from "axios";
+import axios          from "axios";
 
 const REQUIRED_ENV = [
-  "ARC_API_KEY",
-  "AGENT_ID",
+  "ARC_API_KEY", "AGENT_ID",
   "SKILLS_AGENT_WIF", "SKILLS_AGENT_ADDRESS",
   "CLIENT_AGENT_WIF", "CLIENT_AGENT_ADDRESS",
   "ENGINE_AGENT_WIF", "ENGINE_AGENT_ADDRESS",
@@ -22,26 +21,23 @@ const REQUIRED_ENV = [
 let passed = 0;
 let failed = 0;
 
-function ok(msg: string)   { console.log(`  ✅  ${msg}`); passed++; }
-function fail(msg: string) { console.log(`  ❌  ${msg}`); failed++; }
-function warn(msg: string) { console.log(`  ⚠️   ${msg}`); }
-function section(title: string) { console.log(`\n── ${title} ${"─".repeat(50 - title.length)}`); }
+const ok   = (msg: string) => { console.log(`  ✅  ${msg}`); passed++; };
+const fail = (msg: string) => { console.log(`  ❌  ${msg}`); failed++; };
+const warn = (msg: string) =>   console.log(`  ⚠️   ${msg}`);
+const sect = (t: string)   =>   console.log(`\n── ${t} ${"─".repeat(Math.max(0, 48 - t.length))}`);
 
-async function checkBalance(
-  wif:     string,
-  label:   string,
-  minSats: number
-): Promise<number> {
+async function checkBalance(wif: string, label: string, minSats: number): Promise<number> {
   try {
     const key     = PrivateKey.fromWif(wif);
     const address = key.toAddress().toString();
+    const network = (process.env.ARC_API_URL ?? "").includes("testnet") ? "test" : "main";
     const res     = await axios.get(
-      `https://api.whatsonchain.com/v1/bsv/main/address/${address}/unspent`,
+      `https://api.whatsonchain.com/v1/bsv/${network}/address/${address}/unspent`,
       { timeout: 10_000 }
     );
     const balance = (res.data as any[]).reduce((acc, u) => acc + Number(u.value), 0);
     if (balance >= minSats) {
-      ok(`${label}: ${balance.toLocaleString()} sats (min: ${minSats.toLocaleString()})`);
+      ok(`${label}: ${balance.toLocaleString()} sats ✓`);
     } else {
       fail(`${label}: only ${balance.toLocaleString()} sats — need ≥ ${minSats.toLocaleString()}`);
     }
@@ -53,35 +49,32 @@ async function checkBalance(
 }
 
 async function checkARC(): Promise<void> {
-  const url = `${process.env.ARC_API_URL ?? "https://arc.taal.com"}/v1/health`;
+  const url = `${process.env.ARC_API_URL ?? "https://arc.taal.com"}/v1/policy`;
   try {
-    const res = await fetch(url, {
+    await axios.get(url, {
       headers: { "Authorization": `Bearer ${process.env.ARC_API_KEY}` },
+      timeout: 8_000,
     });
-    if (res.ok) {
-      ok(`ARC broadcaster reachable at ${process.env.ARC_API_URL}`);
-    } else {
-      fail(`ARC returned HTTP ${res.status} — check your ARC_API_KEY`);
-    }
+    ok(`ARC broadcaster reachable (${process.env.ARC_API_URL})`);
   } catch (err: any) {
-    fail(`ARC unreachable: ${err.message}`);
+    if (err.response?.status === 401) {
+      fail(`ARC reachable but API key invalid — check ARC_API_KEY`);
+    } else {
+      fail(`ARC unreachable: ${err.message}`);
+    }
   }
 }
 
 async function checkMCP(): Promise<void> {
-  const url = process.env.SKILLS_MCP_URL ?? "http://localhost:3100";
+  const url = `${process.env.SKILLS_MCP_URL ?? "http://localhost:3100"}/health`;
   try {
     const controller = new AbortController();
-    const timeout    = setTimeout(() => controller.abort(), 3000);
-    const res        = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeout);
-    ok(`MCP server reachable at ${url}`);
+    const t = setTimeout(() => controller.abort(), 3_000);
+    const res = await axios.get(url, { signal: controller.signal as any, timeout: 3_000 });
+    clearTimeout(t);
+    ok(`MCP server reachable — ${res.data?.standard ?? "OK"}`);
   } catch (err: any) {
-    if (err.name === "AbortError") {
-      fail(`MCP server timeout — is skills-server running? (npm run skills-server)`);
-    } else {
-      warn(`MCP server not reachable at ${url} — start it before running the full system`);
-    }
+    warn(`MCP server not running yet — start with: npm run skills-server`);
   }
 }
 
@@ -90,78 +83,58 @@ async function main() {
   console.log("║   AgenticFlow — Preflight Check          ║");
   console.log("╚══════════════════════════════════════════╝");
 
-  // 1. Environment variables
-  section("Environment Variables");
+  sect("Environment Variables");
   for (const key of REQUIRED_ENV) {
     const val = process.env[key];
     if (!val || val.includes("...") || val === "your_arc_api_key_here") {
-      fail(`${key} is not set or still has placeholder value`);
+      fail(`${key} is not set`);
     } else {
-      ok(`${key} is set`);
+      ok(`${key} ✓`);
     }
   }
 
-  // 2. Network (mainnet vs testnet)
-  section("Network");
+  sect("Network");
   const arcUrl = process.env.ARC_API_URL ?? "https://arc.taal.com";
   if (arcUrl.includes("testnet")) {
-    warn(`Using TESTNET (${arcUrl}) — switch to mainnet for submission`);
+    warn(`TESTNET mode — switch ARC_API_URL to mainnet for submission`);
   } else {
-    ok(`Using MAINNET (${arcUrl})`);
+    ok(`MAINNET (${arcUrl})`);
   }
 
-  // 3. Agent ID
-  section("On-chain Identity");
-  const agentId = process.env.AGENT_ID ?? "AGFLOW26";
-  if (agentId.length > 16) {
-    fail(`AGENT_ID "${agentId}" is too long — max 16 chars`);
-  } else {
-    ok(`AGENT_ID = "${agentId}" (will appear in every OP_RETURN)`);
-  }
+  sect("Agent ID (on-chain label)");
+  const agentId = process.env.AGENT_ID ?? "";
+  if (agentId.length > 16) fail(`AGENT_ID too long — max 16 chars`);
+  else ok(`AGENT_ID = "${agentId}"`);
 
-  // 4. ARC connectivity
-  section("ARC Broadcaster");
+  sect("ARC Broadcaster");
   await checkARC();
 
-  // 5. Wallet balances
-  section("Wallet Balances");
-  await checkBalance(process.env.CLIENT_AGENT_WIF!,  "ClientAgent", 100_000);
-  await checkBalance(process.env.ENGINE_AGENT_WIF!,  "EngineAgent", 2_000_000);
+  sect("Wallet Balances (BRC-100)");
+  await checkBalance(process.env.CLIENT_AGENT_WIF!,  "ClientAgent", 10_000);
+  await checkBalance(process.env.ENGINE_AGENT_WIF!,  "EngineAgent", 30_000);
+  ok(`SkillsAgent — no initial balance needed`);
 
-  // Skills agent doesn't need initial balance — just note the address
-  ok(`SkillsAgent address: ${process.env.SKILLS_AGENT_ADDRESS} (no initial balance needed)`);
-
-  // 6. Treasury UTXO
-  section("Treasury UTXO");
+  sect("Treasury UTXO");
   const sats = Number(process.env.TREASURY_SATS ?? 0);
-  const need = Number(process.env.CHAIN_COUNT ?? 20) * Number(process.env.CHAIN_FUNDING_SATS ?? 100_000);
-  if (sats >= need) {
-    ok(`Treasury: ${sats.toLocaleString()} sats available (need ${need.toLocaleString()})`);
-  } else {
-    fail(`Treasury: only ${sats.toLocaleString()} sats — need ${need.toLocaleString()} for ${process.env.CHAIN_COUNT ?? 20} chains`);
-  }
+  const need = Number(process.env.CHAIN_COUNT ?? 3) * Number(process.env.CHAIN_FUNDING_SATS ?? 10_000);
+  if (sats >= need) ok(`Treasury: ${sats.toLocaleString()} sats (need ${need.toLocaleString()})`);
+  else fail(`Treasury: ${sats.toLocaleString()} sats — need ${need.toLocaleString()}`);
 
-  // 7. MCP server
-  section("MCP Server");
+  sect("MCP Server (BRC-105)");
   await checkMCP();
 
-  // 8. WhatsOnChain verification link
-  section("Verification Links");
-  console.log(`  🔗  Engine TXs: https://whatsonchain.com/address/${process.env.ENGINE_AGENT_ADDRESS}`);
-  console.log(`  🔍  Search OP_RETURN: https://whatsonchain.com (search for "${agentId}")`);
+  sect("WhatsOnChain Verification Links");
+  console.log(`  🔗  ${`https://whatsonchain.com/address/${process.env.ENGINE_AGENT_ADDRESS}`}`);
+  console.log(`  🔍  OP_RETURN search: "${process.env.AGENT_ID ?? "AGFLOW26"}"`);
 
-  // Summary
   console.log(`\n${"─".repeat(52)}`);
   if (failed === 0) {
-    console.log(`✅  All ${passed} checks passed — system ready to launch!\n`);
-    console.log(`   Run:  npm run dev\n`);
+    console.log(`\n✅  All ${passed} checks passed — ready to launch!\n`);
+    console.log(`   npm run dev\n`);
   } else {
-    console.log(`❌  ${failed} check(s) failed, ${passed} passed — fix the issues above before launching.\n`);
+    console.log(`\n❌  ${failed} check(s) failed — fix them before launching.\n`);
     process.exit(1);
   }
 }
 
-main().catch(err => {
-  console.error("Preflight error:", err.message);
-  process.exit(1);
-});
+main().catch(err => { console.error("Preflight error:", err.message); process.exit(1); });
