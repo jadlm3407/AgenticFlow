@@ -119,11 +119,11 @@ npm run dev
 | Package | Version | Purpose |
 |---|---|---|
 | `@bsv/sdk` | ^2.0.5 | TX construction, P2PKH signing, OP_RETURN |
-| `@bsv/wallet-toolbox` | ^0.1.12 | BRC-100 wallet patterns, key derivation |
+| `@bsv/wallet-toolbox` | ^2.1.19 | BRC-100 wallet patterns, key derivation |
 | `@modelcontextprotocol/sdk` | ^1.10.2 | MCP server/client (agent discovery) |
 | `axios` | ^1.7.2 | UTXO queries, ARC broadcast |
 | `zod` | ^3.23.8 | MCP tool schema validation |
-| `next` | ^14.2.0 | Dashboard UI |
+| `next` | ^16.2.3 | Dashboard UI |
 
 ---
 
