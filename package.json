@@ -1,35 +1,36 @@
 {
   "name": "agenticflow",
   "version": "1.0.0",
+  "type": "module",
   "description": "Autonomous BSV micropayment agent network — Open Run Agentic Pay 2026",
   "scripts": {
-    "dev":              "ts-node --transpile-only orchestrator.ts",
-    "build":            "tsc --project tsconfig.json",
-    "start":            "node dist/orchestrator.js",
+    "dev": "ts-node --transpile-only orchestrator.ts",
+    "build": "tsc --project tsconfig.json",
+    "start": "node dist/orchestrator.js",
     "generate-wallets": "ts-node --transpile-only scripts/generate-wallets.ts",
-    "preflight":        "ts-node --transpile-only scripts/preflight.ts",
-    "skills-server":    "ts-node --transpile-only agents/skills-server.ts",
-    "client-agent":     "ts-node --transpile-only agents/client-agent.ts",
-    "tx-engine":        "ts-node --transpile-only engine/tx-engine.ts",
-    "ui:dev":           "cd ui && next dev",
-    "ui:build":         "cd ui && next build",
-    "typecheck":        "tsc --noEmit"
+    "preflight": "ts-node --transpile-only scripts/preflight.ts",
+    "skills-server": "ts-node --transpile-only agents/skills-server.ts",
+    "client-agent": "ts-node --transpile-only agents/client-agent.ts",
+    "tx-engine": "ts-node --transpile-only engine/tx-engine.ts",
+    "ui:dev": "cd ui && next dev",
+    "ui:build": "cd ui && next build",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@bsv/sdk":                    "^2.0.5",
+    "@bsv/sdk": "^2.0.5",
     "@bsv/wallet-toolbox": "^2.1.19",
-    "@modelcontextprotocol/sdk":   "^1.10.2",
-    "axios":                       "^1.7.2",
-    "dotenv":                      "^16.4.5",
-    "next":                        "^16.2.3",
-    "react":                       "^18.3.1",
-    "react-dom":                   "^18.3.1",
-    "zod":                         "^3.23.8"
+    "@modelcontextprotocol/sdk": "^1.10.2",
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "next": "^16.2.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/node":     "^20.14.0",
-    "@types/react":    "^18.3.3",
-    "ts-node":         "^10.9.2",
-    "typescript":      "^5.5.4"
+    "@types/node": "^20.19.39",
+    "@types/react": "^18.3.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4"
   }
 }
