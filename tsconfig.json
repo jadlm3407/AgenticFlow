@@ -1,15 +1,15 @@
 {
   "compilerOptions": {
-    "target":           "ES2022",
-    "module":           "commonjs",
-    "lib":              ["ES2022"],
-    "outDir":           "./dist",
-    "rootDir":          "./",
-    "strict":           true,
-    "esModuleInterop":  true,
+    "target":            "ES2022",
+    "module":            "CommonJS",
+    "lib":               ["ES2022"],
+    "outDir":            "./dist",
+    "rootDir":           "./",
+    "strict":            true,
+    "esModuleInterop":   true,
     "resolveJsonModule": true,
-    "skipLibCheck":     true,
-    "moduleResolution": "node",
+    "skipLibCheck":      true,
+    "moduleResolution":  "node16",
     "paths": {
       "@/*": ["./*"]
     }

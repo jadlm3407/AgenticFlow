@@ -5,6 +5,16 @@
 
 ---
 
+## Live Verification
+
+Every transaction is auditable on-chain:
+```
+Engine TXs:    https://whatsonchain.com/address/<ENGINE_AGENT_ADDRESS>
+OP_RETURN:     Search "AGFLOW26" on https://whatsonchain.com
+```
+
+---
+
 ## Standards Implemented
 
 | Standard | Description | Role in AgenticFlow |
@@ -14,16 +24,6 @@
 | **go-wallet-toolbox** | BSV BRC-100 wallet reference (Go) | Architecture reference for wallet design |
 | **@bsv/wallet-toolbox** | TypeScript BRC-100 wallet toolkit | Wallet patterns used in all three agents |
 | **MetaNet Desktop** | BRC-100 wallet (port 2121) | Compatible onboarding reference |
-
----
-
-## Live Verification
-
-Every transaction is auditable on-chain:
-```
-Engine TXs:    https://whatsonchain.com/address/<ENGINE_AGENT_ADDRESS>
-OP_RETURN:     Search "AGFLOW26" on https://whatsonchain.com
-```
 
 ---
 
@@ -111,6 +111,25 @@ npm run preflight
 # 5. Launch
 npm run dev
 ```
+
+---
+
+## ARC Broadcaster
+
+AgenticFlow uses **GorillaPool ARC** by default — no API key required:
+
+```env
+ARC_API_URL=https://arc.gorillapool.io
+ARC_API_KEY=none
+```
+
+Alternative broadcasters:
+
+| Broadcaster | URL | API Key |
+|---|---|---|
+| GorillaPool (default) | `https://arc.gorillapool.io` | Not required |
+| WhatsOnChain | `https://arc.whatsonchain.com` | Not required |
+| TAAL | `https://arc.taal.com` | Required (register at platform.taal.com) |
 
 ---
 

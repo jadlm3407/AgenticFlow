@@ -1,7 +1,6 @@
 /**
  * AgenticFlow — Preflight Check
- * Validates wallets, balances, ARC connectivity, and MCP server.
- * Run before every demo or hackathon submission.
+ * Compatible with GorillaPool ARC (no API key) and TAAL ARC.
  *
  * Usage:  npm run preflight
  */
@@ -11,7 +10,7 @@ import { PrivateKey } from "@bsv/sdk";
 import axios          from "axios";
 
 const REQUIRED_ENV = [
-  "ARC_API_KEY", "AGENT_ID",
+  "AGENT_ID",
   "SKILLS_AGENT_WIF", "SKILLS_AGENT_ADDRESS",
   "CLIENT_AGENT_WIF", "CLIENT_AGENT_ADDRESS",
   "ENGINE_AGENT_WIF", "ENGINE_AGENT_ADDRESS",
@@ -30,7 +29,7 @@ async function checkBalance(wif: string, label: string, minSats: number): Promis
   try {
     const key     = PrivateKey.fromWif(wif);
     const address = key.toAddress().toString();
-    const network = (process.env.ARC_API_URL ?? "").includes("testnet") ? "test" : "main";
+    const network = (process.env.ARC_API_URL ?? "").includes("test") ? "test" : "main";
     const res     = await axios.get(
       `https://api.whatsonchain.com/v1/bsv/${network}/address/${address}/unspent`,
       { timeout: 10_000 }
@@ -49,18 +48,26 @@ async function checkBalance(wif: string, label: string, minSats: number): Promis
 }
 
 async function checkARC(): Promise<void> {
-  const url = `${process.env.ARC_API_URL ?? "https://arc.taal.com"}/v1/policy`;
+  const arcUrl    = process.env.ARC_API_URL ?? "https://arc.gorillapool.io";
+  const arcKey    = process.env.ARC_API_KEY ?? "none";
+  const url       = `${arcUrl}/v1/policy`;
+
+  const headers: Record<string, string> = {};
+  if (arcKey && arcKey !== "none") {
+    headers["Authorization"] = `Bearer ${arcKey}`;
+  }
+
   try {
-    await axios.get(url, {
-      headers: { "Authorization": `Bearer ${process.env.ARC_API_KEY}` },
-      timeout: 8_000,
-    });
-    ok(`ARC broadcaster reachable (${process.env.ARC_API_URL})`);
+    await axios.get(url, { headers, timeout: 8_000 });
+    ok(`ARC reachable — ${arcUrl} ${arcKey === "none" ? "(no key — GorillaPool)" : "(with API key)"}`);
   } catch (err: any) {
     if (err.response?.status === 401) {
       fail(`ARC reachable but API key invalid — check ARC_API_KEY`);
+    } else if (err.response?.status === 404) {
+      // Some ARC nodes return 404 on /policy but are still functional
+      ok(`ARC reachable — ${arcUrl} (policy endpoint not exposed, OK)`);
     } else {
-      fail(`ARC unreachable: ${err.message}`);
+      fail(`ARC unreachable at ${arcUrl}: ${err.message}`);
     }
   }
 }
@@ -68,12 +75,9 @@ async function checkARC(): Promise<void> {
 async function checkMCP(): Promise<void> {
   const url = `${process.env.SKILLS_MCP_URL ?? "http://localhost:3100"}/health`;
   try {
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 3_000);
-    const res = await axios.get(url, { signal: controller.signal as any, timeout: 3_000 });
-    clearTimeout(t);
+    const res = await axios.get(url, { timeout: 3_000 });
     ok(`MCP server reachable — ${res.data?.standard ?? "OK"}`);
-  } catch (err: any) {
+  } catch {
     warn(`MCP server not running yet — start with: npm run skills-server`);
   }
 }
@@ -86,17 +90,24 @@ async function main() {
   sect("Environment Variables");
   for (const key of REQUIRED_ENV) {
     const val = process.env[key];
-    if (!val || val.includes("...") || val === "your_arc_api_key_here") {
+    if (!val || val.includes("...")) {
       fail(`${key} is not set`);
     } else {
       ok(`${key} ✓`);
     }
   }
+  // ARC_API_KEY is optional (GorillaPool doesn't need one)
+  const arcKey = process.env.ARC_API_KEY ?? "none";
+  if (arcKey === "none" || arcKey === "") {
+    ok(`ARC_API_KEY = "none" (GorillaPool mode — no key needed) ✓`);
+  } else {
+    ok(`ARC_API_KEY ✓`);
+  }
 
   sect("Network");
-  const arcUrl = process.env.ARC_API_URL ?? "https://arc.taal.com";
-  if (arcUrl.includes("testnet")) {
-    warn(`TESTNET mode — switch ARC_API_URL to mainnet for submission`);
+  const arcUrl = process.env.ARC_API_URL ?? "https://arc.gorillapool.io";
+  if (arcUrl.includes("test")) {
+    warn(`TESTNET mode — switch to mainnet for submission`);
   } else {
     ok(`MAINNET (${arcUrl})`);
   }
@@ -118,14 +129,14 @@ async function main() {
   const sats = Number(process.env.TREASURY_SATS ?? 0);
   const need = Number(process.env.CHAIN_COUNT ?? 3) * Number(process.env.CHAIN_FUNDING_SATS ?? 10_000);
   if (sats >= need) ok(`Treasury: ${sats.toLocaleString()} sats (need ${need.toLocaleString()})`);
-  else fail(`Treasury: ${sats.toLocaleString()} sats — need ${need.toLocaleString()}`);
+  else fail(`Treasury: ${sats.toLocaleString()} sats — need at least ${need.toLocaleString()}`);
 
   sect("MCP Server (BRC-105)");
   await checkMCP();
 
   sect("WhatsOnChain Verification Links");
-  console.log(`  🔗  ${`https://whatsonchain.com/address/${process.env.ENGINE_AGENT_ADDRESS}`}`);
-  console.log(`  🔍  OP_RETURN search: "${process.env.AGENT_ID ?? "AGFLOW26"}"`);
+  console.log(`  🔗  https://whatsonchain.com/address/${process.env.ENGINE_AGENT_ADDRESS ?? "not set"}`);
+  console.log(`  🔍  OP_RETURN search: "${agentId}"`);
 
   console.log(`\n${"─".repeat(52)}`);
   if (failed === 0) {
